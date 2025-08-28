@@ -1,5 +1,5 @@
 const express = require('express');
-const { signup, login } = require('../controllers/auth');
+const { signup, login, getProfile } = require('../controllers/auth');
 const { validateSignup, validateLogin } = require('../middleware/validate');
 const verifyToken = require('../middleware/jwt');
 

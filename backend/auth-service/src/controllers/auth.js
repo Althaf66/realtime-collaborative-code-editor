@@ -102,4 +102,20 @@ async function getProfile(req, res) {
   }
 }
 
-module.exports = { signup, login, getProfile };
+async function googleCallback(req, res) {
+  try {
+    const user = req.user; // Set by Passport after Google OAuth
+    const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
+    const refreshToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    await redisClient.setEx(`refresh_token:${user.id}`, REFRESH_TOKEN_EXPIRY, refreshToken);
+
+    // Redirect or respond with tokens (adjust based on frontend needs)
+    res.status(200).json({ accessToken, refreshToken, userId: user.id });
+  } catch (error) {
+    console.error('Google OAuth error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+module.exports = { signup, login, getProfile, googleCallback };

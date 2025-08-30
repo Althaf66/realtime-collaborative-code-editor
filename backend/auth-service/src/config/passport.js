@@ -1,6 +1,7 @@
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const { PrismaClient } = require('../generated/prisma');
+const { logger } = require('../utils/logger');
 
 const prisma = new PrismaClient();
 
@@ -13,36 +14,37 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // Find or create user
+        logger.info(`Google OAuth attempt for profile ID: ${profile.id}`);
         let user = await prisma.user.findUnique({ where: { googleId: profile.id } });
         if (!user) {
           user = await prisma.user.findUnique({ where: { email: profile.emails[0].value } });
           if (!user) {
-            // Create new user if none exists
             user = await prisma.user.create({
               data: {
                 email: profile.emails[0].value,
                 googleId: profile.id,
               },
             });
+            logger.info(`Created new user via Google OAuth: ${user.id}`);
           } else {
-            // Update existing user with Google ID
             user = await prisma.user.update({
               where: { email: profile.emails[0].value },
               data: { googleId: profile.id },
             });
+            logger.info(`Linked Google ID to existing user: ${user.id}`);
           }
         }
         done(null, user);
       } catch (error) {
+        logger.error(`Google OAuth strategy error:`, error);
         done(error, null);
       }
     }
   )
 );
 
-// Serialize user to session (minimal, as we use JWTs)
 passport.serializeUser((user, done) => {
+  logger.debug(`Serializing user: ${user.id}`);
   done(null, user.id);
 });
 
@@ -51,6 +53,7 @@ passport.deserializeUser(async (id, done) => {
     const user = await prisma.user.findUnique({ where: { id } });
     done(null, user);
   } catch (error) {
+    logger.error(`Deserialize user error for ID ${id}:`, error);
     done(error, null);
   }
 });

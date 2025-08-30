@@ -2,118 +2,102 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('../generated/prisma');
 const redis = require('redis');
+const { logger } = require('../utils/logger'); // New: Winston logger
 
 const prisma = new PrismaClient();
-const redisClient = redis.createClient(process.env.REDIS_URL || 'redis://localhost:6379');
-
-redisClient.connect().catch(console.error);
+const redisClient = redis.createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
+redisClient.connect().catch(err => logger.error('Redis connection error:', err));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60; // 7 days in seconds
 
-// Signup handler
 async function signup(req, res) {
   const { name, email, password } = req.body;
 
-  // Basic input validation
-  if (!email || !password || !email.includes('@') || password.length < 6) {
-    return res.status(400).json({ error: 'Invalid email or password (minimum 6 characters)' });
-  }
-
   try {
-    // Check if user exists
+    logger.info(`Signup attempt for email: ${email}`);
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
+      logger.warn(`Signup failed: Email already registered: ${email}`);
       return res.status(400).json({ error: 'Email already registered' });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create user
     const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-      },
+      data: { name, email, password: hashedPassword },
     });
 
-    // Generate JWT
     const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
     const refreshToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
-    // Store refresh token in Redis
     await redisClient.setEx(`refresh_token:${user.id}`, REFRESH_TOKEN_EXPIRY, refreshToken);
+    logger.info(`User signed up successfully: ${user.id}`);
 
     res.status(201).json({ accessToken, refreshToken, userId: user.id });
   } catch (error) {
-    console.error('Signup error:', error);
+    logger.error(`Signup error for ${email}:`, error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
 
-// Login handler
 async function login(req, res) {
   const { email, password } = req.body;
 
-  // Basic input validation
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
-  }
-
   try {
-    // Find user
+    logger.info(`Login attempt for email: ${email}`);
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !user.password) {
+      logger.warn(`Login failed: Invalid credentials for ${email}`);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Verify password
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) {
+      logger.warn(`Login failed: Incorrect password for ${email}`);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Generate JWT
     const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
     const refreshToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
-    // Store refresh token in Redis
     await redisClient.setEx(`refresh_token:${user.id}`, REFRESH_TOKEN_EXPIRY, refreshToken);
+    logger.info(`User logged in successfully: ${user.id}`);
 
     res.status(200).json({ accessToken, refreshToken, userId: user.id });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error(`Login error for ${email}:`, error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
 
 async function getProfile(req, res) {
   try {
+    logger.info(`Profile request for userId: ${req.userId}`);
     const user = await prisma.user.findUnique({ where: { id: req.userId } });
     if (!user) {
+      logger.warn(`Profile not found for userId: ${req.userId}`);
       return res.status(404).json({ error: 'User not found' });
     }
     res.status(200).json({ email: user.email, id: user.id });
   } catch (error) {
-    console.error('Profile error:', error);
+    logger.error(`Profile error for userId ${req.userId}:`, error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
 
 async function googleCallback(req, res) {
   try {
-    const user = req.user; // Set by Passport after Google OAuth
+    const user = req.user;
+    logger.info(`Google OAuth callback for userId: ${user.id}, email: ${user.email}`);
     const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
     const refreshToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
     await redisClient.setEx(`refresh_token:${user.id}`, REFRESH_TOKEN_EXPIRY, refreshToken);
+    logger.info(`Google OAuth successful for userId: ${user.id}`);
 
-    // Redirect or respond with tokens (adjust based on frontend needs)
     res.status(200).json({ accessToken, refreshToken, userId: user.id });
   } catch (error) {
-    console.error('Google OAuth error:', error);
+    logger.error(`Google OAuth error:`, error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
